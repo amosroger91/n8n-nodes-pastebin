@@ -22,7 +22,7 @@
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
 		"release": "release-it --ci",
-		"prepublishOnly": "n8n-node prerelease"
+
 	},
 	"files": [
 		"dist"
