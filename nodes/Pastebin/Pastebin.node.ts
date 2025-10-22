@@ -6,6 +6,20 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import puppeteer from 'puppeteer';
+import { exec } from 'child_process';
+
+// Helper function to check for Puppeteer dependencies
+async function checkPuppeteerDependencies(): Promise<string | null> {
+    return new Promise((resolve) => {
+        exec('./check_puppeteer_deps.sh', { cwd: __dirname }, (error, stdout, stderr) => {
+            if (error) {
+                resolve(`Puppeteer dependency check failed:\n${stdout}\n${stderr}`);
+            } else {
+                resolve(null);
+            }
+        });
+    });
+}
 
 async function createPaste(url: string, content: string): Promise<string> {
 	const browser = await puppeteer.launch({
@@ -74,7 +88,7 @@ export class Pastebin implements INodeType {
 				displayName: 'Pastebin URL',
 				name: 'pastebinUrl',
 				type: 'string',
-				default: 'https://secureshare.kscomputing.com/',
+				default: '',
 				placeholder: 'https://pastebin.com/',
 				description: 'The URL of the pastebin instance',
 			},
@@ -95,6 +109,11 @@ rows: 5,
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
+
+		const dependencyError = await checkPuppeteerDependencies();
+		if (dependencyError) {
+			throw new NodeOperationError(this.getNode(), dependencyError);
+		}
 
 		let item: INodeExecutionData;
 		let pastebinUrl: string;
