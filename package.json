@@ -21,7 +21,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"release": "release-it --ci",
+		"release": "release-it --ci"
 
 	},
 	"files": [
