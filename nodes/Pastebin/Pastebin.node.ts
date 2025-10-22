@@ -10,7 +10,17 @@ import puppeteer from 'puppeteer';
 async function createPaste(url: string, content: string): Promise<string> {
 	const browser = await puppeteer.launch({
 		headless: true,
-		args: ['--no-sandbox', '--disable-setuid-sandbox'],
+		executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+		args: [
+			'--no-sandbox',
+			'--disable-setuid-sandbox',
+			'--disable-dev-shm-usage', // Overcomes limited resource problems
+			'--disable-accelerated-2d-canvas', // Speeds up rendering
+			'--no-first-run', // Skips initial setup
+			'--no-zygote', // Prevents a crash on some systems
+			'--single-process', // (Optional) if you're short on memory
+			'--disable-gpu' // (Optional) if you're short on memory
+		],
 	});
 
 	const page = await browser.newPage();
