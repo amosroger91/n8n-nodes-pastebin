@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0]
+
+First stable release. Functionally identical to 0.2.0 — promoted to 1.0.0 to mark the
+node as production-ready: native PrivateBin v2 end-to-end encryption, the PrivateBin API
+credential with a connection test, and the official PrivateBin branding.
+
 ## [0.2.0]
 
 > **Renamed from `n8n-nodes-pastebin` to `n8n-nodes-privatebin`.** The node is now
