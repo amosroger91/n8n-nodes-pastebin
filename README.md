@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/privatebin-logo.png" alt="PrivateBin" width="320" />
+</p>
+
 # n8n-nodes-privatebin
 
 An [n8n](https://n8n.io) community node that creates **end-to-end encrypted [PrivateBin](https://privatebin.info) pastes** and returns a one-click shareable link.
@@ -90,6 +94,12 @@ npm run lint     # lint against n8n community-node rules
 npm test         # build, then run the encryption/roundtrip tests
 npm run dev      # run against a local n8n instance
 ```
+
+## Trademarks & credits
+
+The PrivateBin name, logo, and icon belong to the [PrivateBin project](https://privatebin.info)
+and are used here only to identify the service this node integrates with. This is an
+independent community node and is not affiliated with or endorsed by the PrivateBin project.
 
 ## License
 

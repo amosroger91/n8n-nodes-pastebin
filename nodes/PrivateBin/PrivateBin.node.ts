@@ -205,7 +205,7 @@ export class PrivateBin implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'PrivateBin',
 		name: 'privateBin',
-		icon: { light: 'file:privatebin.svg', dark: 'file:privatebin.dark.svg' },
+		icon: 'file:privatebin.svg',
 		group: ['output'],
 		version: 1,
 		description:
