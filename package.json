@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-privatebin",
-	"version": "0.2.0",
+	"version": "1.0.0",
 	"description": "An n8n node to create end-to-end encrypted PrivateBin pastes (privatebin.net or self-hosted PrivateBin instances)",
 	"license": "MIT",
 	"homepage": "https://github.com/amosroger91/n8n-nodes-privatebin",
