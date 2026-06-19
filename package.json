@@ -34,6 +34,9 @@
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"strict": false,
+		"credentials": [
+			"dist/credentials/PrivateBinApi.credentials.js"
+		],
 		"nodes": [
 			"dist/nodes/PrivateBin/PrivateBin.node.js"
 		]

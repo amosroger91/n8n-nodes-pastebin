@@ -60,16 +60,21 @@ npm install n8n-nodes-privatebin
 ## Usage
 
 1. Add the **PrivateBin** node to your workflow.
-2. Set **PrivateBin URL** to your instance — `https://privatebin.net/` (default) or your own self-hosted PrivateBin.
+2. Create a **PrivateBin API** credential and set the instance URL — `https://privatebin.net/` (default) or your own self-hosted PrivateBin. When you save the credential, n8n **tests the connection** and only confirms it if the URL is a reachable, genuine PrivateBin instance.
 3. Set **Content** to the text or secret you want to share.
 4. (Optional) Choose an **Expire** time, toggle **Burn After Reading**, and pick a **Format**.
 5. Execute the workflow.
+
+### Credential
+
+| Field | Description |
+| --- | --- |
+| **PrivateBin URL** | The URL of your PrivateBin instance (privatebin.net or self-hosted). Must be HTTPS. Verified on save by fetching the instance's read-only JSON-LD schema and checking for a PrivateBin marker. |
 
 ### Parameters
 
 | Parameter | Description |
 | --- | --- |
-| **PrivateBin URL** | The URL of your PrivateBin instance (privatebin.net or self-hosted). Must be HTTPS. |
 | **Content** | The text to encrypt and paste. |
 | **Expire** | When the paste expires (`5min` … `never`). |
 | **Burn After Reading** | Delete the paste immediately after it is read once. |

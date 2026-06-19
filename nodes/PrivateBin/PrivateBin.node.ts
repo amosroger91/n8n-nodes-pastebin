@@ -1,5 +1,9 @@
 import type {
+	ICredentialsDecrypted,
+	ICredentialTestFunctions,
+	IDataObject,
 	IExecuteFunctions,
+	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
@@ -216,16 +220,15 @@ export class PrivateBin implements INodeType {
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		usableAsTool: true,
-		properties: [
+		credentials: [
 			{
-				displayName: 'PrivateBin URL',
-				name: 'privateBinUrl',
-				type: 'string',
-				default: 'https://privatebin.net/',
-				placeholder: 'https://privatebin.net/',
-				description:
-					'The URL of the PrivateBin instance (the public privatebin.net or your own self-hosted PrivateBin — see https://privatebin.info). This node only works with PrivateBin, not pastebin.com or other paste services.',
+				name: 'privateBinApi',
+				required: true,
+				// Verifies the URL is a reachable PrivateBin instance when the credential is saved.
+				testedBy: 'privateBinConnectionTest',
 			},
+		],
+		properties: [
 			{
 				displayName: 'Content',
 				name: 'content',
@@ -277,13 +280,62 @@ export class PrivateBin implements INodeType {
 		],
 	};
 
+	methods = {
+		credentialTest: {
+			// Confirms the configured URL is reachable AND actually a PrivateBin instance,
+			// by fetching its read-only JSON-LD paste schema and checking a PrivateBin marker.
+			async privateBinConnectionTest(
+				this: ICredentialTestFunctions,
+				credential: ICredentialsDecrypted,
+			): Promise<INodeCredentialTestResult> {
+				const rawUrl = (credential.data?.url as string) ?? '';
+
+				let baseUrl: string;
+				try {
+					baseUrl = resolveBaseUrl(rawUrl);
+				} catch (error) {
+					return { status: 'Error', message: (error as Error).message };
+				}
+
+				try {
+					// In a credential-test context, helpers only exposes `request` (no httpRequest).
+					// eslint-disable-next-line @n8n/community-nodes/no-deprecated-workflow-functions
+					const body = (await this.helpers.request({
+						method: 'GET',
+						uri: `${baseUrl}/?jsonld=paste`,
+						headers: { 'X-Requested-With': 'JSONHttpRequest' },
+						json: true,
+						timeout: 15000,
+					})) as IDataObject;
+
+					const context = body?.['@context'] as IDataObject | undefined;
+					if (context && 'deletetoken' in context) {
+						return { status: 'OK', message: 'Connection successful — PrivateBin instance verified.' };
+					}
+
+					return {
+						status: 'Error',
+						message:
+							'The URL is reachable but does not look like a PrivateBin instance. Double-check it points to PrivateBin (https://privatebin.info), not pastebin.com or another service.',
+					};
+				} catch (error) {
+					return {
+						status: 'Error',
+						message: `Could not reach a PrivateBin instance at "${baseUrl}": ${(error as Error).message}`,
+					};
+				}
+			},
+		},
+	};
+
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+		const credentials = await this.getCredentials('privateBinApi');
+		const privateBinUrl = credentials.url as string;
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const privateBinUrl = this.getNodeParameter('privateBinUrl', itemIndex, '') as string;
 				const content = this.getNodeParameter('content', itemIndex, '') as string;
 				const expire = this.getNodeParameter('expire', itemIndex, '1week') as string;
 				const burnAfterReading = this.getNodeParameter(
