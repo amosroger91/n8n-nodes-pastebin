@@ -28,4 +28,4 @@ jobs:
         run: 'npm run build'
 
       - name: Run tests
-        run: 'node --test test/pastebin.test.mjs'
+        run: 'node --test test/privatebin.test.mjs'

@@ -1,11 +1,15 @@
 {
-	"name": "n8n-nodes-pastebin",
+	"name": "n8n-nodes-privatebin",
 	"version": "0.1.4",
-	"description": "An n8n node to create end-to-end encrypted pastes on a self-hosted PrivateBin instance",
+	"description": "An n8n node to create end-to-end encrypted PrivateBin pastes (privatebin.net or self-hosted PrivateBin instances)",
 	"license": "MIT",
-	"homepage": "",
+	"homepage": "https://github.com/amosroger91/n8n-nodes-privatebin",
 	"keywords": [
-		"n8n-community-node-package"
+		"n8n-community-node-package",
+		"n8n",
+		"privatebin",
+		"encryption",
+		"paste"
 	],
 	"author": {
 		"name": "Roger Amos",
@@ -13,7 +17,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/amosroger91/n8n-nodes-pastebin.git"
+		"url": "https://github.com/amosroger91/n8n-nodes-privatebin.git"
 	},
 	"scripts": {
 		"build": "n8n-node build",
@@ -21,7 +25,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"test": "npm run build && node --test test/pastebin.test.mjs",
+		"test": "npm run build && node --test test/privatebin.test.mjs",
 		"release": "release-it --ci"
 	},
 	"files": [
@@ -31,7 +35,7 @@
 		"n8nNodesApiVersion": 1,
 		"strict": false,
 		"nodes": [
-			"dist/nodes/Pastebin/Pastebin.node.js"
+			"dist/nodes/PrivateBin/PrivateBin.node.js"
 		]
 	},
 	"devDependencies": {

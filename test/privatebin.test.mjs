@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pbkdf2Sync, createDecipheriv } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { buildEncryptedPaste, toBase58, resolveBaseUrl } from '../dist/nodes/Pastebin/Pastebin.node.js';
+import { buildEncryptedPaste, toBase58, resolveBaseUrl } from '../dist/nodes/PrivateBin/PrivateBin.node.js';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 

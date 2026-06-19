@@ -19,7 +19,10 @@ import { deflateRawSync } from 'node:zlib';
  *
  *  This is a from-scratch, dependency-free reimplementation of the PrivateBin
  *  v2 "create paste" protocol, built specifically for the open-source
- *  `n8n-nodes-pastebin` community node (https://github.com/amosroger91/n8n-nodes-pastebin).
+ *  `n8n-nodes-privatebin` community node (https://github.com/amosroger91/n8n-nodes-privatebin).
+ *  It targets PrivateBin (https://privatebin.info) only — both privatebin.net and
+ *  self-hosted PrivateBin instances. It is NOT compatible with pastebin.com or any
+ *  other paste service.
  *
  *  It encrypts the paste entirely client-side and uploads only ciphertext, so
  *  the PrivateBin server never sees the plaintext. The decryption key lives in
@@ -90,14 +93,14 @@ export function resolveBaseUrl(baseUrlRaw: string): string {
 	try {
 		parsed = new URL(baseUrlRaw);
 	} catch {
-		throw new ApplicationError(`Invalid Pastebin URL: "${baseUrlRaw}". Expected something like https://privatebin.example.com/`);
+		throw new ApplicationError(`Invalid PrivateBin URL: "${baseUrlRaw}". Expected something like https://privatebin.net/`);
 	}
 
 	// The shareable link (key in the fragment) is meant for the open internet, so the
 	// upload channel itself must be authenticated. Reject plain HTTP except on localhost.
 	if (parsed.protocol !== 'https:' && !LOCAL_HOSTS.has(parsed.hostname)) {
 		throw new ApplicationError(
-			`Pastebin URL must use HTTPS (got "${parsed.protocol}//"). Plain HTTP would let the network tamper with the paste. ` +
+			`PrivateBin URL must use HTTPS (got "${parsed.protocol}//"). Plain HTTP would let the network tamper with the paste. ` +
 				'Use an https:// URL (http:// is only allowed for localhost).',
 		);
 	}
@@ -198,29 +201,30 @@ async function createPaste(
 	};
 }
 
-export class Pastebin implements INodeType {
+export class PrivateBin implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Pastebin',
-		name: 'pastebin',
-		icon: { light: 'file:pastebin.svg', dark: 'file:pastebin.dark.svg' },
+		displayName: 'PrivateBin',
+		name: 'privateBin',
+		icon: { light: 'file:privatebin.svg', dark: 'file:privatebin.dark.svg' },
 		group: ['output'],
 		version: 1,
 		description:
-			'Creates an end-to-end encrypted paste on a PrivateBin instance and returns a shareable link',
+			'Create an end-to-end encrypted PrivateBin paste and return a shareable link. Works with PrivateBin (privatebin.net and self-hosted instances) only.',
 		defaults: {
-			name: 'Pastebin',
+			name: 'PrivateBin',
 		},
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		usableAsTool: true,
 		properties: [
 			{
-				displayName: 'Pastebin URL',
-				name: 'pastebinUrl',
+				displayName: 'PrivateBin URL',
+				name: 'privateBinUrl',
 				type: 'string',
-				default: 'https://secureshare.kscomputing.com/',
-				placeholder: 'https://privatebin.example.com/',
-				description: 'The URL of the PrivateBin instance',
+				default: 'https://privatebin.net/',
+				placeholder: 'https://privatebin.net/',
+				description:
+					'The URL of the PrivateBin instance (the public privatebin.net or your own self-hosted PrivateBin — see https://privatebin.info). This node only works with PrivateBin, not pastebin.com or other paste services.',
 			},
 			{
 				displayName: 'Content',
@@ -279,7 +283,7 @@ export class Pastebin implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const pastebinUrl = this.getNodeParameter('pastebinUrl', itemIndex, '') as string;
+				const privateBinUrl = this.getNodeParameter('privateBinUrl', itemIndex, '') as string;
 				const content = this.getNodeParameter('content', itemIndex, '') as string;
 				const expire = this.getNodeParameter('expire', itemIndex, '1week') as string;
 				const burnAfterReading = this.getNodeParameter(
@@ -291,7 +295,7 @@ export class Pastebin implements INodeType {
 
 				const result = await createPaste(
 					this,
-					pastebinUrl,
+					privateBinUrl,
 					content,
 					expire,
 					burnAfterReading,
@@ -299,7 +303,7 @@ export class Pastebin implements INodeType {
 				);
 
 				const item = items[itemIndex];
-				item.json.pastebinLink = result.url;
+				item.json.privateBinLink = result.url;
 				item.json.pasteId = result.pasteId;
 				item.json.deleteToken = result.deleteToken;
 				returnData.push(item);

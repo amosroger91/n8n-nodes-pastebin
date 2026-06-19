@@ -1,17 +1,17 @@
 {
-	"node": "n8n-nodes-pastebin",
+	"node": "n8n-nodes-privatebin.privateBin",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
 	"categories": ["Miscellaneous"],
 	"resources": {
 		"credentialDocumentation": [
 			{
-				"url": "https://github.com/amosroger91/n8n-nodes-pastebin"
+				"url": "https://github.com/amosroger91/n8n-nodes-privatebin"
 			}
 		],
 		"primaryDocumentation": [
 			{
-				"url": "https://github.com/amosroger91/n8n-nodes-pastebin"
+				"url": "https://github.com/amosroger91/n8n-nodes-privatebin"
 			}
 		]
 	}
