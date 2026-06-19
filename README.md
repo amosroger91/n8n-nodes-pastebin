@@ -24,6 +24,15 @@ The node implements the PrivateBin v2 paste protocol:
 
 > The PrivateBin client in this package was written from scratch **for this open-source project**. It is not affiliated with, or an official library of, the PrivateBin project.
 
+## Security model
+
+This node is for sharing **sensitive-but-not-secret** data — text that is already acceptable to have inside your n8n instance, but that you don't want sitting on the open internet: a config snippet, a one-time note, a "burn after reading" link, and so on.
+
+- **The link is the secret.** The decryption key lives in the URL fragment (after `#`), so anyone with the full link can read the paste. Share it over a trusted channel and prefer short expiry / burn-after-reading for one-time hand-offs.
+- **The server never sees plaintext.** Encryption happens entirely in the node; only ciphertext is uploaded.
+- **HTTPS is enforced.** The instance URL must be `https://` (plain `http://` is allowed only for `localhost`), so the upload can't be tampered with in transit.
+- **Not for credentials.** Use n8n's own credential store for API keys, passwords, and tokens — not this node.
+
 ## Installation
 
 In n8n, go to **Settings → Community Nodes → Install** and enter:

@@ -69,6 +69,29 @@ interface PrivateBinResult {
 	deleteToken: string;
 }
 
+// Hosts for which plain HTTP is tolerated (local PrivateBin instances / testing).
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
+function resolveBaseUrl(baseUrlRaw: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(baseUrlRaw);
+	} catch {
+		throw new Error(`Invalid Pastebin URL: "${baseUrlRaw}". Expected something like https://privatebin.example.com/`);
+	}
+
+	// The shareable link (key in the fragment) is meant for the open internet, so the
+	// upload channel itself must be authenticated. Reject plain HTTP except on localhost.
+	if (parsed.protocol !== 'https:' && !LOCAL_HOSTS.has(parsed.hostname)) {
+		throw new Error(
+			`Pastebin URL must use HTTPS (got "${parsed.protocol}//"). Plain HTTP would let the network tamper with the paste. ` +
+				'Use an https:// URL (http:// is only allowed for localhost).',
+		);
+	}
+
+	return baseUrlRaw.replace(/\/+$/, '');
+}
+
 async function createPaste(
 	context: IExecuteFunctions,
 	baseUrlRaw: string,
@@ -77,7 +100,7 @@ async function createPaste(
 	burnAfterReading: boolean,
 	formatter: string,
 ): Promise<PrivateBinResult> {
-	const baseUrl = baseUrlRaw.replace(/\/+$/, '');
+	const baseUrl = resolveBaseUrl(baseUrlRaw);
 
 	// --- Cryptographic material ----------------------------------------------
 	const pasteKey = randomBytes(32); // 256-bit key, shared via the URL fragment
@@ -91,56 +114,65 @@ async function createPaste(
 	const pasteDataJson = JSON.stringify({ paste: secret });
 	const compressed = deflateRawSync(Buffer.from(pasteDataJson, 'utf8'));
 
-	// --- adata: the encryption spec, also used as GCM additional auth data ----
-	// Layout: [[iv, salt, iterations, keySize, tagSize, "aes", "gcm", "zlib"],
-	//          formatter, openDiscussion, burnAfterReading]
-	const adata = [
-		[iv.toString('base64'), salt.toString('base64'), 100000, 256, 128, 'aes', 'gcm', 'zlib'],
-		formatter,
-		0,
-		burnAfterReading ? 1 : 0,
-	];
-	const adataString = JSON.stringify(adata);
+	try {
+		// --- adata: the encryption spec, also used as GCM additional auth data ----
+		// Layout: [[iv, salt, iterations, keySize, tagSize, "aes", "gcm", "zlib"],
+		//          formatter, openDiscussion, burnAfterReading]
+		const adata = [
+			[iv.toString('base64'), salt.toString('base64'), 100000, 256, 128, 'aes', 'gcm', 'zlib'],
+			formatter,
+			0,
+			burnAfterReading ? 1 : 0,
+		];
+		const adataString = JSON.stringify(adata);
 
-	// --- Encrypt (AES-256-GCM) -----------------------------------------------
-	const cipher = createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: 16 });
-	cipher.setAAD(Buffer.from(adataString, 'utf8'));
-	const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
-	const authTag = cipher.getAuthTag();
-	// PrivateBin stores ciphertext and tag concatenated, base64-encoded.
-	const ct = Buffer.concat([ciphertext, authTag]).toString('base64');
+		// --- Encrypt (AES-256-GCM) -------------------------------------------
+		const cipher = createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: 16 });
+		cipher.setAAD(Buffer.from(adataString, 'utf8'));
+		const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+		const authTag = cipher.getAuthTag();
+		// PrivateBin stores ciphertext and tag concatenated, base64-encoded.
+		const ct = Buffer.concat([ciphertext, authTag]).toString('base64');
 
-	// --- Upload ----------------------------------------------------------------
-	const payload = {
-		v: 2,
-		adata,
-		ct,
-		meta: { expire },
-	};
+		// --- Upload ------------------------------------------------------------
+		const payload = {
+			v: 2,
+			adata,
+			ct,
+			meta: { expire },
+		};
 
-	const response = (await context.helpers.httpRequest({
-		method: 'POST',
-		url: baseUrl,
-		body: payload,
-		json: true,
-		headers: {
-			'Content-Type': 'application/json',
-			'X-Requested-With': 'JSONHttpRequest',
-		},
-	})) as { status: number; id?: string; deletetoken?: string; message?: string };
+		const response = (await context.helpers.httpRequest({
+			method: 'POST',
+			url: baseUrl,
+			body: payload,
+			json: true,
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Requested-With': 'JSONHttpRequest',
+			},
+		})) as { status?: number; id?: string; deletetoken?: string; message?: string };
 
-	if (response.status !== 0) {
-		throw new Error(`PrivateBin rejected the paste: ${response.message ?? 'unknown error'}`);
+		if (response.status !== 0 || !response.id) {
+			throw new Error(`PrivateBin rejected the paste: ${response.message ?? 'unknown error'}`);
+		}
+
+		const keyBase58 = toBase58(pasteKey);
+		const url = `${baseUrl}/?${response.id}#${keyBase58}`;
+
+		return {
+			url,
+			pasteId: response.id,
+			deleteToken: response.deletetoken ?? '',
+		};
+	} finally {
+		// Defense-in-depth: wipe the key material and the (compressed) plaintext from
+		// memory once we're done. The Base58 key inside the returned URL is the secret
+		// the user asked us to produce, so that necessarily survives.
+		pasteKey.fill(0);
+		derivedKey.fill(0);
+		compressed.fill(0);
 	}
-
-	const keyBase58 = toBase58(pasteKey);
-	const url = `${baseUrl}/?${response.id}#${keyBase58}`;
-
-	return {
-		url,
-		pasteId: response.id as string,
-		deleteToken: response.deletetoken as string,
-	};
 }
 
 export class Pastebin implements INodeType {
@@ -200,7 +232,8 @@ export class Pastebin implements INodeType {
 				name: 'burnAfterReading',
 				type: 'boolean',
 				default: false,
-				description: 'Whether the paste is deleted immediately after it is read once',
+				description:
+					'Whether the paste is destroyed the first time it is opened. Enable this for one-time secret sharing; leave it off when several people need to open the same link.',
 			},
 			{
 				displayName: 'Format',
