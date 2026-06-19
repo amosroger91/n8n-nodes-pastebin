@@ -21,8 +21,8 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
+		"test": "npm run build && node --test test/pastebin.test.mjs",
 		"release": "release-it --ci"
-
 	},
 	"files": [
 		"dist"
@@ -30,13 +30,7 @@
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"strict": false,
-		"credentials": [
-			"dist/credentials/GithubIssuesApi.credentials.js",
-			"dist/credentials/GithubIssuesOAuth2Api.credentials.js"
-		],
 		"nodes": [
-			"dist/nodes/GithubIssues/GithubIssues.node.js",
-			"dist/nodes/Example/Example.node.js",
 			"dist/nodes/Pastebin/Pastebin.node.js"
 		]
 	},
@@ -53,6 +47,9 @@
 	"release-it": {
 		"git": {
 			"pushArgs": "--force-with-lease"
+		},
+		"hooks": {
+			"after:bump": "npm run build"
 		}
 	}
 }

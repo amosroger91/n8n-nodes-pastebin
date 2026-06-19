@@ -4,8 +4,12 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { ApplicationError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
+// The no-restricted-imports rule targets n8n Cloud (which sandboxes community nodes).
+// This node is for self-hosted PrivateBin instances, and raw DEFLATE is required by the
+// PrivateBin wire format, so the restriction does not apply here.
+// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
 import { deflateRawSync } from 'node:zlib';
 
 /*
@@ -37,7 +41,7 @@ import { deflateRawSync } from 'node:zlib';
 // Bitcoin Base58 alphabet — used by PrivateBin to encode the key in the URL fragment.
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
-function toBase58(bytes: Buffer): string {
+export function toBase58(bytes: Buffer): string {
 	// Big-endian interpretation of the byte array as a single integer.
 	let value = 0n;
 	for (const byte of bytes) {
@@ -69,21 +73,30 @@ interface PrivateBinResult {
 	deleteToken: string;
 }
 
+interface EncryptedPaste {
+	// The PrivateBin `adata` array (encryption spec + paste metadata).
+	adata: Array<string | number | Array<string | number>>;
+	// Base64 ciphertext with the GCM auth tag appended.
+	ct: string;
+	// Base58-encoded paste key, destined for the URL fragment.
+	keyBase58: string;
+}
+
 // Hosts for which plain HTTP is tolerated (local PrivateBin instances / testing).
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
-function resolveBaseUrl(baseUrlRaw: string): string {
+export function resolveBaseUrl(baseUrlRaw: string): string {
 	let parsed: URL;
 	try {
 		parsed = new URL(baseUrlRaw);
 	} catch {
-		throw new Error(`Invalid Pastebin URL: "${baseUrlRaw}". Expected something like https://privatebin.example.com/`);
+		throw new ApplicationError(`Invalid Pastebin URL: "${baseUrlRaw}". Expected something like https://privatebin.example.com/`);
 	}
 
 	// The shareable link (key in the fragment) is meant for the open internet, so the
 	// upload channel itself must be authenticated. Reject plain HTTP except on localhost.
 	if (parsed.protocol !== 'https:' && !LOCAL_HOSTS.has(parsed.hostname)) {
-		throw new Error(
+		throw new ApplicationError(
 			`Pastebin URL must use HTTPS (got "${parsed.protocol}//"). Plain HTTP would let the network tamper with the paste. ` +
 				'Use an https:// URL (http:// is only allowed for localhost).',
 		);
@@ -92,16 +105,16 @@ function resolveBaseUrl(baseUrlRaw: string): string {
 	return baseUrlRaw.replace(/\/+$/, '');
 }
 
-async function createPaste(
-	context: IExecuteFunctions,
-	baseUrlRaw: string,
+/**
+ * Encrypts a secret into the PrivateBin v2 paste format. Pure (no network), so it
+ * can be unit-tested in isolation. Returns the `adata`, base64 ciphertext, and the
+ * Base58 key for the URL fragment.
+ */
+export function buildEncryptedPaste(
 	secret: string,
-	expire: string,
 	burnAfterReading: boolean,
 	formatter: string,
-): Promise<PrivateBinResult> {
-	const baseUrl = resolveBaseUrl(baseUrlRaw);
-
+): EncryptedPaste {
 	// --- Cryptographic material ----------------------------------------------
 	const pasteKey = randomBytes(32); // 256-bit key, shared via the URL fragment
 	const iv = randomBytes(12); // 96-bit GCM nonce
@@ -118,7 +131,7 @@ async function createPaste(
 		// --- adata: the encryption spec, also used as GCM additional auth data ----
 		// Layout: [[iv, salt, iterations, keySize, tagSize, "aes", "gcm", "zlib"],
 		//          formatter, openDiscussion, burnAfterReading]
-		const adata = [
+		const adata: EncryptedPaste['adata'] = [
 			[iv.toString('base64'), salt.toString('base64'), 100000, 256, 128, 'aes', 'gcm', 'zlib'],
 			formatter,
 			0,
@@ -134,37 +147,7 @@ async function createPaste(
 		// PrivateBin stores ciphertext and tag concatenated, base64-encoded.
 		const ct = Buffer.concat([ciphertext, authTag]).toString('base64');
 
-		// --- Upload ------------------------------------------------------------
-		const payload = {
-			v: 2,
-			adata,
-			ct,
-			meta: { expire },
-		};
-
-		const response = (await context.helpers.httpRequest({
-			method: 'POST',
-			url: baseUrl,
-			body: payload,
-			json: true,
-			headers: {
-				'Content-Type': 'application/json',
-				'X-Requested-With': 'JSONHttpRequest',
-			},
-		})) as { status?: number; id?: string; deletetoken?: string; message?: string };
-
-		if (response.status !== 0 || !response.id) {
-			throw new Error(`PrivateBin rejected the paste: ${response.message ?? 'unknown error'}`);
-		}
-
-		const keyBase58 = toBase58(pasteKey);
-		const url = `${baseUrl}/?${response.id}#${keyBase58}`;
-
-		return {
-			url,
-			pasteId: response.id,
-			deleteToken: response.deletetoken ?? '',
-		};
+		return { adata, ct, keyBase58: toBase58(pasteKey) };
 	} finally {
 		// Defense-in-depth: wipe the key material and the (compressed) plaintext from
 		// memory once we're done. The Base58 key inside the returned URL is the secret
@@ -173,6 +156,46 @@ async function createPaste(
 		derivedKey.fill(0);
 		compressed.fill(0);
 	}
+}
+
+async function createPaste(
+	context: IExecuteFunctions,
+	baseUrlRaw: string,
+	secret: string,
+	expire: string,
+	burnAfterReading: boolean,
+	formatter: string,
+): Promise<PrivateBinResult> {
+	const baseUrl = resolveBaseUrl(baseUrlRaw);
+	const { adata, ct, keyBase58 } = buildEncryptedPaste(secret, burnAfterReading, formatter);
+
+	const payload = {
+		v: 2,
+		adata,
+		ct,
+		meta: { expire },
+	};
+
+	const response = (await context.helpers.httpRequest({
+		method: 'POST',
+		url: baseUrl,
+		body: payload,
+		json: true,
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Requested-With': 'JSONHttpRequest',
+		},
+	})) as { status?: number; id?: string; deletetoken?: string; message?: string };
+
+	if (response.status !== 0 || !response.id) {
+		throw new ApplicationError(`PrivateBin rejected the paste: ${response.message ?? 'unknown error'}`);
+	}
+
+	return {
+		url: `${baseUrl}/?${response.id}#${keyBase58}`,
+		pasteId: response.id,
+		deleteToken: response.deletetoken ?? '',
+	};
 }
 
 export class Pastebin implements INodeType {
@@ -217,13 +240,13 @@ export class Pastebin implements INodeType {
 				default: '1week',
 				description: 'When the paste should expire',
 				options: [
-					{ name: '5 Minutes', value: '5min' },
-					{ name: '10 Minutes', value: '10min' },
-					{ name: '1 Hour', value: '1hour' },
 					{ name: '1 Day', value: '1day' },
-					{ name: '1 Week', value: '1week' },
+					{ name: '1 Hour', value: '1hour' },
 					{ name: '1 Month', value: '1month' },
+					{ name: '1 Week', value: '1week' },
 					{ name: '1 Year', value: '1year' },
+					{ name: '10 Minutes', value: '10min' },
+					{ name: '5 Minutes', value: '5min' },
 					{ name: 'Never', value: 'never' },
 				],
 			},
@@ -242,9 +265,9 @@ export class Pastebin implements INodeType {
 				default: 'plaintext',
 				description: 'How the paste content is displayed',
 				options: [
+					{ name: 'Markdown', value: 'markdown' },
 					{ name: 'Plain Text', value: 'plaintext' },
 					{ name: 'Source Code', value: 'syntaxhighlighting' },
-					{ name: 'Markdown', value: 'markdown' },
 				],
 			},
 		],
