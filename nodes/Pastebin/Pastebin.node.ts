@@ -5,44 +5,142 @@ import type {
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
-import puppeteer from 'puppeteer';
+import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { deflateRawSync } from 'node:zlib';
 
-async function createPaste(url: string, content: string): Promise<string> {
-	const browser = await puppeteer.launch({
-		headless: true,
-		args: ['--no-sandbox', '--disable-setuid-sandbox'],
-	});
+/*
+ * ============================================================================
+ *  PrivateBin v2 client — written FOR THIS OPEN-SOURCE PROJECT ONLY.
+ * ============================================================================
+ *
+ *  This is a from-scratch, dependency-free reimplementation of the PrivateBin
+ *  v2 "create paste" protocol, built specifically for the open-source
+ *  `n8n-nodes-pastebin` community node (https://github.com/amosroger91/n8n-nodes-pastebin).
+ *
+ *  It encrypts the paste entirely client-side and uploads only ciphertext, so
+ *  the PrivateBin server never sees the plaintext. The decryption key lives in
+ *  the URL fragment (after the `#`) and is never sent to the server.
+ *
+ *  Protocol implemented (matches PrivateBin's reference web client):
+ *    - 256-bit random paste key  -> Base58-encoded into the URL fragment
+ *    - PBKDF2-HMAC-SHA256, 100,000 iterations, 64-bit salt -> AES key
+ *    - AES-256-GCM encryption, 96-bit nonce, 128-bit auth tag
+ *    - Raw DEFLATE compression of the paste payload
+ *    - `adata` (the encryption spec) is used as GCM additional authenticated data
+ *
+ *  This implementation is provided for use within this project. It is not an
+ *  official PrivateBin library and carries no affiliation with the PrivateBin
+ *  project.
+ * ============================================================================
+ */
 
-	const page = await browser.newPage();
+// Bitcoin Base58 alphabet — used by PrivateBin to encode the key in the URL fragment.
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
-	await page.goto(url, {
-		waitUntil: 'domcontentloaded',
-		timeout: 60000,
-	});
+function toBase58(bytes: Buffer): string {
+	// Big-endian interpretation of the byte array as a single integer.
+	let value = 0n;
+	for (const byte of bytes) {
+		value = value * 256n + BigInt(byte);
+	}
 
-	await page.waitForSelector('textarea:not([style*="display: none"])');
-	await page.type('textarea:not([style*="display: none"])', content);
+	let encoded = '';
+	while (value > 0n) {
+		const remainder = Number(value % 58n);
+		value = value / 58n;
+		encoded = BASE58_ALPHABET[remainder] + encoded;
+	}
 
-	await page.evaluate(() => {
-		const buttons = Array.from(document.querySelectorAll('button'));
-		const sendButton = buttons.find(
-			(button) => button.innerText.includes('Send') || button.innerText.includes('Create'),
-		);
-
-		if (sendButton) {
-			sendButton.click();
+	// Preserve leading zero bytes as leading '1' characters.
+	for (const byte of bytes) {
+		if (byte === 0) {
+			encoded = '1' + encoded;
 		} else {
-			throw new Error("'Send' or 'Create' button not found");
+			break;
 		}
-	});
+	}
 
-	await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+	return encoded;
+}
 
-	const newUrl = page.url();
+interface PrivateBinResult {
+	url: string;
+	pasteId: string;
+	deleteToken: string;
+}
 
-	await browser.close();
+async function createPaste(
+	context: IExecuteFunctions,
+	baseUrlRaw: string,
+	secret: string,
+	expire: string,
+	burnAfterReading: boolean,
+	formatter: string,
+): Promise<PrivateBinResult> {
+	const baseUrl = baseUrlRaw.replace(/\/+$/, '');
 
-	return newUrl;
+	// --- Cryptographic material ----------------------------------------------
+	const pasteKey = randomBytes(32); // 256-bit key, shared via the URL fragment
+	const iv = randomBytes(12); // 96-bit GCM nonce
+	const salt = randomBytes(8); // 64-bit PBKDF2 salt
+
+	// Derive the AES key from the paste key (PBKDF2-HMAC-SHA256, 100k iterations).
+	const derivedKey = pbkdf2Sync(pasteKey, salt, 100000, 32, 'sha256');
+
+	// --- Build and compress the paste payload --------------------------------
+	const pasteDataJson = JSON.stringify({ paste: secret });
+	const compressed = deflateRawSync(Buffer.from(pasteDataJson, 'utf8'));
+
+	// --- adata: the encryption spec, also used as GCM additional auth data ----
+	// Layout: [[iv, salt, iterations, keySize, tagSize, "aes", "gcm", "zlib"],
+	//          formatter, openDiscussion, burnAfterReading]
+	const adata = [
+		[iv.toString('base64'), salt.toString('base64'), 100000, 256, 128, 'aes', 'gcm', 'zlib'],
+		formatter,
+		0,
+		burnAfterReading ? 1 : 0,
+	];
+	const adataString = JSON.stringify(adata);
+
+	// --- Encrypt (AES-256-GCM) -----------------------------------------------
+	const cipher = createCipheriv('aes-256-gcm', derivedKey, iv, { authTagLength: 16 });
+	cipher.setAAD(Buffer.from(adataString, 'utf8'));
+	const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+	const authTag = cipher.getAuthTag();
+	// PrivateBin stores ciphertext and tag concatenated, base64-encoded.
+	const ct = Buffer.concat([ciphertext, authTag]).toString('base64');
+
+	// --- Upload ----------------------------------------------------------------
+	const payload = {
+		v: 2,
+		adata,
+		ct,
+		meta: { expire },
+	};
+
+	const response = (await context.helpers.httpRequest({
+		method: 'POST',
+		url: baseUrl,
+		body: payload,
+		json: true,
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Requested-With': 'JSONHttpRequest',
+		},
+	})) as { status: number; id?: string; deletetoken?: string; message?: string };
+
+	if (response.status !== 0) {
+		throw new Error(`PrivateBin rejected the paste: ${response.message ?? 'unknown error'}`);
+	}
+
+	const keyBase58 = toBase58(pasteKey);
+	const url = `${baseUrl}/?${response.id}#${keyBase58}`;
+
+	return {
+		url,
+		pasteId: response.id as string,
+		deleteToken: response.deletetoken as string,
+	};
 }
 
 export class Pastebin implements INodeType {
@@ -52,7 +150,8 @@ export class Pastebin implements INodeType {
 		icon: { light: 'file:pastebin.svg', dark: 'file:pastebin.dark.svg' },
 		group: ['output'],
 		version: 1,
-		description: 'Creates a paste on a pastebin instance and returns the link',
+		description:
+			'Creates an end-to-end encrypted paste on a PrivateBin instance and returns a shareable link',
 		defaults: {
 			name: 'Pastebin',
 		},
@@ -65,8 +164,8 @@ export class Pastebin implements INodeType {
 				name: 'pastebinUrl',
 				type: 'string',
 				default: 'https://secureshare.kscomputing.com/',
-				placeholder: 'https://pastebin.com/',
-				description: 'The URL of the pastebin instance',
+				placeholder: 'https://privatebin.example.com/',
+				description: 'The URL of the PrivateBin instance',
 			},
 			{
 				displayName: 'Content',
@@ -74,34 +173,87 @@ export class Pastebin implements INodeType {
 				type: 'string',
 				default: '',
 				typeOptions: {
-				
-rows: 5,
+					rows: 5,
 				},
 				placeholder: 'Enter content to paste...',
-				description: 'The content to be pasted',
+				description: 'The content to be encrypted and pasted',
+			},
+			{
+				displayName: 'Expire',
+				name: 'expire',
+				type: 'options',
+				default: '1week',
+				description: 'When the paste should expire',
+				options: [
+					{ name: '5 Minutes', value: '5min' },
+					{ name: '10 Minutes', value: '10min' },
+					{ name: '1 Hour', value: '1hour' },
+					{ name: '1 Day', value: '1day' },
+					{ name: '1 Week', value: '1week' },
+					{ name: '1 Month', value: '1month' },
+					{ name: '1 Year', value: '1year' },
+					{ name: 'Never', value: 'never' },
+				],
+			},
+			{
+				displayName: 'Burn After Reading',
+				name: 'burnAfterReading',
+				type: 'boolean',
+				default: false,
+				description: 'Whether the paste is deleted immediately after it is read once',
+			},
+			{
+				displayName: 'Format',
+				name: 'formatter',
+				type: 'options',
+				default: 'plaintext',
+				description: 'How the paste content is displayed',
+				options: [
+					{ name: 'Plain Text', value: 'plaintext' },
+					{ name: 'Source Code', value: 'syntaxhighlighting' },
+					{ name: 'Markdown', value: 'markdown' },
+				],
 			},
 		],
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
-
-		let item: INodeExecutionData;
-		let pastebinUrl: string;
-		let content: string;
+		const returnData: INodeExecutionData[] = [];
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				pastebinUrl = this.getNodeParameter('pastebinUrl', itemIndex, '') as string;
-				content = this.getNodeParameter('content', itemIndex, '') as string;
-				item = items[itemIndex];
+				const pastebinUrl = this.getNodeParameter('pastebinUrl', itemIndex, '') as string;
+				const content = this.getNodeParameter('content', itemIndex, '') as string;
+				const expire = this.getNodeParameter('expire', itemIndex, '1week') as string;
+				const burnAfterReading = this.getNodeParameter(
+					'burnAfterReading',
+					itemIndex,
+					false,
+				) as boolean;
+				const formatter = this.getNodeParameter('formatter', itemIndex, 'plaintext') as string;
 
-				const newUrl = await createPaste(pastebinUrl, content);
-				item.json.pastebinLink = newUrl;
+				const result = await createPaste(
+					this,
+					pastebinUrl,
+					content,
+					expire,
+					burnAfterReading,
+					formatter,
+				);
 
+				const item = items[itemIndex];
+				item.json.pastebinLink = result.url;
+				item.json.pasteId = result.pasteId;
+				item.json.deleteToken = result.deleteToken;
+				returnData.push(item);
 			} catch (error) {
 				if (this.continueOnFail()) {
-					items.push({ json: this.getInputData(itemIndex)[0].json, error, pairedItem: itemIndex });
+					returnData.push({
+						json: this.getInputData(itemIndex)[0].json,
+						error,
+						pairedItem: itemIndex,
+					});
 				} else {
 					if (error.context) {
 						error.context.itemIndex = itemIndex;
@@ -114,6 +266,6 @@ rows: 5,
 			}
 		}
 
-		return [items];
+		return [returnData];
 	}
 }

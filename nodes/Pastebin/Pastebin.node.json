@@ -6,12 +6,12 @@
 	"resources": {
 		"credentialDocumentation": [
 			{
-				"url": ""
+				"url": "https://github.com/amosroger91/n8n-nodes-pastebin"
 			}
 		],
 		"primaryDocumentation": [
 			{
-				"url": ""
+				"url": "https://github.com/amosroger91/n8n-nodes-pastebin"
 			}
 		]
 	}
